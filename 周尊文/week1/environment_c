@@ -1,0 +1,25 @@
+#创建环境并配置
+#可以创建pyproject.yaml文件
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-ship-project"
+version = "0.1.0"
+description = "USV navigation & VHF pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Lei Shen", email = "you@example.com" }]
+
+# 核心依赖（环境配置清单）
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "opencv-python>=4.9",
+  "matplotlib>=3.8",
+  "pydantic>=2",
+  "typer>=0.12",
+  "torch>=2.3; platform_system!='Darwin' or platform_machine!='arm64'",
+]
