@@ -1,0 +1,22 @@
+class SelfAttentionWithLinear(nn.Module):
+    # 自注意力
+    def __init__(self, hidden_size, num_attention_heads):
+        super(SelfAttentionWithLinear, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_attention_heads = num_attention_heads
+        self.attention_head_size = hidden_size // num_attention_heads
+
+        # 使用nn.Linear定义Q、K、V的线性变换
+        self.query = nn.Linear(hidden_size, hidden_size)
+        self.key = nn.Linear(hidden_size, hidden_size)
+        self.value = nn.Linear(hidden_size, hidden_size)
+
+        # 输出线性层
+        self.output_dense = nn.Linear(hidden_size, hidden_size)
+      
+    # 多头机制
+    def transpose_for_scores(self, x):
+        batch_size, max_len, hidden_size = x.size()
+        x = x.view(batch_size, max_len, self.num_attention_heads, self.attention_head_size)
+        x = x.transpose(1, 2)
+        return x
