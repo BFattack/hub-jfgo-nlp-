@@ -1,0 +1,52 @@
+"optimizer": "adam",
+ "learning_rate": 1e-3,
+  "model_type":"bert",
+  "max_length": 30,
+  "epoch": 15,
+  AP:15.9%
+
+  "optimizer": "adam",
+ "learning_rate": 1e-4,
+  "model_type":"bert",
+  "max_length": 30,
+  "epoch": 100,
+  AP:45.3%
+
+  "optimizer": "adam",
+ "learning_rate": 1e-4,
+  "model_type":"bert",
+  "max_length": 30,
+  "epoch": 150,
+  AP:50.2%
+
+  "optimizer": "adam",
+ "learning_rate": 2e-5,
+  "model_type":"bert",
+  "max_length": 30,
+  "epoch": 150,
+  AP:40.9%
+
+  "optimizer": "adam",
+ "learning_rate": 2e-5,
+  "model_type":"bert",
+  "max_length": 30,
+  "epoch": 200,
+  AP:52.7%
+
+  "optimizer": "adam",
+ "learning_rate": 2e-5,
+  "model_type":"lstm",
+  "max_length": 40,
+  "epoch": 200,
+  AP:63.4%
+
+  "optimizer": "adam",
+ "learning_rate": 2e-5,
+  "model_type":"lstm",
+  "max_length": 50,
+  "epoch": 200,
+  "dropout":0.3
+  AP:70.1%
+
+
+
