@@ -1,0 +1,432 @@
+
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from transformers import BertTokenizer, BertConfig, BertLMHeadModel
+from transformers import AdamW, get_linear_schedule_with_warmup
+from tqdm import tqdm
+import argparse
+import json
+from typing import List, Dict, Tuple
+
+
+class TextDataset(Dataset):
+    """文本数据集类，用于加载和处理训练语料"""
+    
+    def __init__(self, text_file: str, tokenizer, max_length: int = 512):
+        """
+        初始化数据集
+        Args:
+            text_file: 文本文件路径
+            tokenizer: BERT分词器
+            max_length: 最大序列长度
+        """
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.samples = []
+        
+        print(f"正在加载语料文件: {text_file}")
+        
+        # 读取文本文件
+        with open(text_file, 'r', encoding='utf-8') as f:
+            texts = f.readlines()
+        
+        # 处理每条文本
+        for text in tqdm(texts, desc="处理语料"):
+            text = text.strip()
+            if len(text) > 0:
+                # 对文本进行编码
+                encoding = tokenizer(
+                    text,
+                    truncation=True,
+                    max_length=max_length,
+                    padding='max_length',
+                    return_tensors='pt'
+                )
+                
+                # 自回归任务：输入是句子，输出是相同句子向右偏移一位
+                input_ids = encoding['input_ids'].squeeze()
+                attention_mask = encoding['attention_mask'].squeeze()
+                
+                # 创建标签（下一个token预测）
+                labels = input_ids.clone()
+                labels[labels == tokenizer.pad_token_id] = -100  # 忽略padding token的loss
+                
+                self.samples.append({
+                    'input_ids': input_ids,
+                    'attention_mask': attention_mask,
+                    'labels': labels
+                })
+        
+        print(f"共加载 {len(self.samples)} 个训练样本")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
+class BertAutoregressiveTrainer:
+    """BERT自回归训练器"""
+    
+    def __init__(self, 
+                 model_name: str = 'bert-base-chinese',
+                 max_length: int = 512,
+                 batch_size: int = 8,
+                 learning_rate: float = 2e-5,
+                 epochs: int = 3,
+                 warmup_steps: int = 1000,
+                 output_dir: str = './bert_autoregressive_model'):
+        """
+        初始化训练器
+        Args:
+            model_name: 预训练BERT模型名称
+            max_length: 最大序列长度
+            batch_size: 批次大小
+            learning_rate: 学习率
+            epochs: 训练轮数
+            warmup_steps: 预热步数
+            output_dir: 模型输出目录
+        """
+        self.model_name = model_name
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.epochs = epochs
+        self.warmup_steps = warmup_steps
+        self.output_dir = output_dir
+        
+        # 设备配置
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"使用设备: {self.device}")
+        
+        # 加载分词器
+        print(f"正在加载分词器: {model_name}")
+        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        
+        # 加载模型配置
+        self.config = BertConfig.from_pretrained(model_name)
+        
+        # 加载预训练BERT模型（用于语言建模）
+        print(f"正在加载预训练模型: {model_name}")
+        self.model = BertLMHeadModel.from_pretrained(model_name, config=self.config)
+        self.model.to(self.device)
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        print(f"模型初始化完成，参数数量: {self.model.num_parameters():,}")
+    
+    def train(self, train_file: str, val_file: str = None):
+        """
+        训练模型
+        Args:
+            train_file: 训练语料文件路径
+            val_file: 验证语料文件路径（可选）
+        """
+        # 加载数据集
+        print("准备训练数据...")
+        train_dataset = TextDataset(train_file, self.tokenizer, self.max_length)
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=True,
+            num_workers=4
+        )
+        
+        val_loader = None
+        if val_file and os.path.exists(val_file):
+            print("准备验证数据...")
+            val_dataset = TextDataset(val_file, self.tokenizer, self.max_length)
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=4
+            )
+        
+        # 优化器和调度器
+        optimizer = AdamW(self.model.parameters(), lr=self.learning_rate)
+        total_steps = len(train_loader) * self.epochs
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=self.warmup_steps,
+            num_training_steps=total_steps
+        )
+        
+        # 训练循环
+        print(f"\n开始训练，共 {self.epochs} 个epoch")
+        self.model.train()
+        global_step = 0
+        best_val_loss = float('inf')
+        
+        for epoch in range(self.epochs):
+            print(f"\nEpoch {epoch + 1}/{self.epochs}")
+            epoch_loss = 0
+            
+            progress_bar = tqdm(train_loader, desc=f"Training Epoch {epoch + 1}")
+            for batch in progress_bar:
+                # 将数据移到设备上
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                # 前向传播
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                
+                loss = outputs.loss
+                
+                # 反向传播
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                
+                epoch_loss += loss.item()
+                global_step += 1
+                
+                # 更新进度条
+                progress_bar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'lr': f'{scheduler.get_last_lr()[0]:.2e}'
+                })
+                
+                # 定期保存检查点
+                if global_step % 1000 == 0:
+                    checkpoint_path = os.path.join(self.output_dir, f'checkpoint-{global_step}')
+                    self.model.save_pretrained(checkpoint_path)
+                    self.tokenizer.save_pretrained(checkpoint_path)
+            
+            avg_epoch_loss = epoch_loss / len(train_loader)
+            print(f"Epoch {epoch + 1} 平均损失: {avg_epoch_loss:.4f}")
+            
+            # 验证
+            if val_loader:
+                val_loss = self.evaluate(val_loader)
+                print(f"验证集损失: {val_loss:.4f}")
+                
+                # 保存最佳模型
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_model_path = os.path.join(self.output_dir, 'best_model')
+                    self.model.save_pretrained(best_model_path)
+                    self.tokenizer.save_pretrained(best_model_path)
+                    print(f"保存最佳模型到: {best_model_path}")
+            
+            # 每个epoch结束后保存模型
+            epoch_model_path = os.path.join(self.output_dir, f'epoch-{epoch + 1}')
+            self.model.save_pretrained(epoch_model_path)
+            self.tokenizer.save_pretrained(epoch_model_path)
+        
+        # 保存最终模型
+        final_model_path = os.path.join(self.output_dir, 'final_model')
+        self.model.save_pretrained(final_model_path)
+        self.tokenizer.save_pretrained(final_model_path)
+        print(f"\n训练完成！最终模型已保存到: {final_model_path}")
+    
+    def evaluate(self, data_loader):
+        """
+        评估模型
+        Args:
+            data_loader: 数据加载器
+        Returns:
+            平均损失
+        """
+        self.model.eval()
+        total_loss = 0
+        
+        with torch.no_grad():
+            for batch in tqdm(data_loader, desc="Evaluating"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                
+                total_loss += outputs.loss.item()
+        
+        self.model.train()
+        return total_loss / len(data_loader)
+    
+    def generate_text(self, 
+                      prompt: str, 
+                      max_length: int = 100,
+                      temperature: float = 1.0,
+                      top_k: int = 50,
+                      top_p: float = 0.9):
+        """
+        使用训练好的模型生成文本（自回归生成）
+        Args:
+            prompt: 输入提示文本
+            max_length: 生成文本的最大长度
+            temperature: 温度参数（控制生成的随机性）
+            top_k: Top-K采样
+            top_p: Top-P采样（nucleus sampling）
+        Returns:
+            生成的文本
+        """
+        self.model.eval()
+        
+        # 编码输入
+        input_ids = self.tokenizer.encode(prompt, return_tensors='pt').to(self.device)
+        
+        # 生成文本
+        with torch.no_grad():
+            output = self.model.generate(
+                input_ids,
+                max_length=max_length,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.sep_token_id,
+                num_return_sequences=1
+            )
+        
+        # 解码生成的文本
+        generated_text = self.tokenizer.decode(output[0], skip_special_tokens=True)
+        return generated_text
+    
+    def interactive_generation(self):
+        """交互式文本生成"""
+        print("\n交互式文本生成模式")
+        print("输入提示文本，模型将生成后续内容")
+        print("输入 'quit' 退出")
+        
+        while True:
+            prompt = input("\n请输入提示文本: ")
+            if prompt.lower() == 'quit':
+                break
+            
+            generated = self.generate_text(
+                prompt,
+                max_length=100,
+                temperature=0.8,
+                top_k=50,
+                top_p=0.9
+            )
+            print(f"\n生成结果:\n{generated}")
+
+
+def prepare_sample_data():
+    """准备示例训练数据"""
+    print("准备示例训练数据...")
+    
+    
+    # 保存训练数据
+    with open('/mnt/okcomputer/output/train_data.txt', 'w', encoding='utf-8') as f:
+        for text in sample_chinese_texts:
+            f.write(text + '\n')
+    
+    # 保存验证数据（使用相同数据作为示例）
+    with open('/mnt/okcomputer/output/val_data.txt', 'w', encoding='utf-8') as f:
+        for text in sample_chinese_texts[:5]:
+            f.write(text + '\n')
+    
+    print("示例数据已保存到:")
+    print("- /mnt/okcomputer/output/train_data.txt")
+    print("- /mnt/okcomputer/output/val_data.txt")
+    print("\n注意：这些只是示例数据，建议使用更大规模的语料库以获得更好的训练效果")
+
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='BERT自回归语言模型训练')
+    parser.add_argument('--mode', type=str, default='train', 
+                        choices=['train', 'generate', 'interactive'],
+                        help='运行模式：train（训练）、generate（生成）、interactive（交互式生成）')
+    parser.add_argument('--train_file', type=str, default='./train_data.txt',
+                        help='训练语料文件路径')
+    parser.add_argument('--val_file', type=str, default='./val_data.txt',
+                        help='验证语料文件路径')
+    parser.add_argument('--model_name', type=str, default='bert-base-chinese',
+                        help='预训练BERT模型名称')
+    parser.add_argument('--output_dir', type=str, default='./bert_autoregressive_model',
+                        help='模型输出目录')
+    parser.add_argument('--max_length', type=int, default=512,
+                        help='最大序列长度')
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='批次大小')
+    parser.add_argument('--learning_rate', type=float, default=2e-5,
+                        help='学习率')
+    parser.add_argument('--epochs', type=int, default=3,
+                        help='训练轮数')
+    parser.add_argument('--prompt', type=str, default='人工智能是',
+                        help='生成模式下的输入提示')
+    parser.add_argument('--prepare_data', action='store_true',
+                        help='准备示例数据')
+    
+    args = parser.parse_args()
+    
+    # 准备示例数据
+    if args.prepare_data:
+        prepare_sample_data()
+        return
+    
+    # 初始化训练器
+    trainer = BertAutoregressiveTrainer(
+        model_name=args.model_name,
+        max_length=args.max_length,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        epochs=args.epochs,
+        output_dir=args.output_dir
+    )
+    
+    # 根据模式运行
+    if args.mode == 'train':
+        # 检查训练文件是否存在
+        if not os.path.exists(args.train_file):
+            print(f"错误：训练文件 {args.train_file} 不存在！")
+            print("请使用 --prepare_data 参数生成示例数据，或提供自己的语料文件")
+            return
+        
+        trainer.train(args.train_file, args.val_file)
+    
+    elif args.mode == 'generate':
+        # 检查输出目录是否存在
+        if not os.path.exists(args.output_dir):
+            print(f"错误：模型目录 {args.output_dir} 不存在！请先进行训练")
+            return
+        
+        # 加载训练好的模型
+        print(f"正在加载训练好的模型: {args.output_dir}")
+        trainer.model = BertLMHeadModel.from_pretrained(args.output_dir)
+        trainer.tokenizer = BertTokenizer.from_pretrained(args.output_dir)
+        trainer.model.to(trainer.device)
+        
+        # 生成文本
+        generated = trainer.generate_text(args.prompt)
+        print(f"\n提示: {args.prompt}")
+        print(f"生成结果: {generated}")
+    
+    elif args.mode == 'interactive':
+        # 检查输出目录是否存在
+        if not os.path.exists(args.output_dir):
+            print(f"错误：模型目录 {args.output_dir} 不存在！请先进行训练")
+            return
+        
+        # 加载训练好的模型
+        print(f"正在加载训练好的模型: {args.output_dir}")
+        trainer.model = BertLMHeadModel.from_pretrained(args.output_dir)
+        trainer.tokenizer = BertTokenizer.from_pretrained(args.output_dir)
+        trainer.model.to(trainer.device)
+        
+        # 交互式生成
+        trainer.interactive_generation()
+
+
+if __name__ == '__main__':
+    main()
