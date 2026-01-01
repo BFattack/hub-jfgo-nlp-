@@ -1,0 +1,115 @@
+from datasets import load_dataset
+import torch
+import torch.nn as nn
+from transformers import BertModel, BertTokenizer, BertConfig
+from transformers import EncoderDecoderModel, AutoTokenizer
+from transformers import Trainer, TrainingArguments, DataCollatorForSeq2Seq
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+bert_model_name = "bert-base-uncased"
+
+decoder_model_name = "bert-base-uncased" # 或者 "gpt2" 等
+
+tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+
+
+model = EncoderDecoderModel.from_encoder_decoder_pretrained(
+    bert_model_name,
+    decoder_model_name,
+    tokenizer=tokenizer # Pass tokenizer here to ensure it's shared and configured correctly
+)
+
+
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
+model.config.decoder.max_length = 128
+model.config.decoder.min_length = 0
+model.config.decoder.num_beams = 4
+model.config.decoder.eos_token_id = tokenizer.eos_token_id
+model.config.decoder.pad_token_id = tokenizer.pad_token_id
+
+    dummy_data = Datageneration()
+    from datasets import Dataset, DatasetDict
+
+    dataset = DatasetDict({
+        "train": Dataset.from_list([{"translation": item["translation"]} for item in dummy_data["train"]])
+    })
+
+def preprocess_function(examples):
+    inputs = [ex["en"] for ex in examples["translation"]]
+    targets = [ex["fr"] for ex in examples["translation"]]
+
+    model_inputs = tokenizer(inputs, max_length=128, truncation=True, padding="max_length")
+
+    labels = tokenizer(targets, max_length=128, truncation=True, padding="max_length")
+
+    labels["input_ids"] = [[label if label != tokenizer.pad_token_id else tokenizer.eos_token_id for label in s] for s
+                           in labels["input_ids"]]
+
+
+    model_inputs["labels"] = labels["input_ids"]
+
+    return model_inputs
+
+tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=["translation"])
+
+def main():
+
+    training_args = TrainingArguments(
+        output_dir="./bert_seq2seq_output",
+        evaluation_strategy="epoch",  
+        learning_rate=2e-5,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=8,
+        gradient_accumulation_steps=4,  
+        weight_decay=0.01,
+        num_train_epochs=3,
+        predict_with_generate=True,  
+        fp16=True,  
+        logging_dir='./logs',
+        logging_steps=10,
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+    )
+
+    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_dataset["train"],
+        eval_dataset=tokenized_dataset.get("validation", tokenized_dataset["train"]),  # 如果没有 validation，用 train
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+    )
+
+    trainer.train()
+    trainer.save_model("./bert_seq2seq_output/final_model")
+    tokenizer.save_pretrained("./bert_seq2seq_output/final_model")
+
+if __name__ == "__main__":
+    main()
+
+    tokenizer = AutoTokenizer.from_pretrained("./bert_seq2seq_output/final_model")
+    model = AutoModelForSeq2SeqLM.from_pretrained("./bert_seq2seq_output/final_model")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    input_text = "Hello world."
+    input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(device)
+
+    outputs = model.generate(
+        input_ids,
+        max_length=128,
+        num_beams=4,
+        early_stopping=True,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id
+    )
+
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    print(f"Input: {input_text}")
+    print(f"Output: {generated_text}")
