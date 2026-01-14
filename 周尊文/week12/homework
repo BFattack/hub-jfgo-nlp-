@@ -1,0 +1,9 @@
+	          位置编码	transformer	多头注意力	Ff设计	归一化层选择	激活函数
+Baichuan3	alibi	串行	GQA	gated门控（SwiGLU）	RMSNorm	SiLU
+GLM-4	rope	串行	MQA	gated门控（GeGLU）	RMSNorm	GeLU
+DBRX	rope	串行	MHA	gated门控（MoE+SwiGLU）	RMSNorm	SiLU
+Deepseek	rope	串行	MHA	gated门控（DeepseekMoE）	RMSNorm	SiLU
+Gemma	rope	串行	MHA	gated门控（SwiGLU）	RMSNorm	SiLU
+Grok1	rope	串行	MHA	gated门控（MoE+GeGLU）	RMSNorm	GeLU
+Mistral	rope	串行	GQA	gated门控（MoE+SwiGLU）	RMSNorm	SiLU
+Qwen2.5	rope	串行	GQA	gated门控（SwiGLU）	RMSNorm	SiLU
