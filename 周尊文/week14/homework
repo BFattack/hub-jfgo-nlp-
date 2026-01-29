@@ -1,0 +1,65 @@
+import openai  # 或者任何你使用的大模型接口库
+
+# 定义函数来调用大模型
+def call_large_model(prompt: str, model="gpt-4", max_tokens=100):
+    """
+    使用大模型生成结果。
+
+    """
+    try:
+        response = openai.Completion.create(
+            engine=model,
+            prompt=prompt,
+            max_tokens=max_tokens
+        )
+        return response.choices[0].text.strip()  # 提取并返回生成的文本
+    except Exception as e:
+        print(f"Error calling model: {e}")
+        return None
+
+# 处理输入，解析任务
+def process_input(user_input: str):
+
+    # 简单示例：根据用户输入识别要执行的任务
+    if "calculate" in user_input.lower():
+        return "calculate", user_input
+    elif "generate report" in user_input.lower():
+        return "generate_report", user_input
+    else:
+        return "unknown_task", None
+
+# 根据任务名称调用相应的函数
+def execute_task(task_name: str, parameters: str):
+n: 任务执行结果
+    """
+    if task_name == "calculate":
+        # 处理计算任务
+        return calculate_task(parameters)
+    elif task_name == "generate_report":
+        # 生成报告任务
+        return generate_report_task(parameters)
+    else:
+        return "Unknown task"
+
+# 计算任务示例
+def calculate_task(parameters: str):
+
+    # 可以调用GPT进行公式计算，或者执行其他复杂计算
+    result = call_large_model(f"Calculate: {parameters}")
+    return result
+
+# 生成报告任务示例
+def generate_report_task(parameters: str):
+
+    result = call_large_model(f"Generate a report: {parameters}")
+    return result
+
+# 主函数
+def main():
+    user_input = input("请输入任务描述：")  # 获取用户输入
+    task_name, parameters = process_input(user_input)  # 解析任务
+    result = execute_task(task_name, parameters)  # 执行任务
+    print(f"任务结果: {result}")  # 输出任务结果
+
+if __name__ == "__main__":
+    main()
